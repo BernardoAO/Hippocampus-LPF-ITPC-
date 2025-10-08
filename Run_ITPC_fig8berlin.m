@@ -1,6 +1,8 @@
 %%%% ITPC Analysis
 %%% Bernardo AO, adapted from ...
-
+% Data needed: sessionInfo.mat, CSC(n).ncs
+% Script dependencies: ITPC_analysis.m,  plotTrialPerCell, trialInfo2simple, readCRTsd
+% 
 addpath(genpath('W:\LABanalysis\SilviaProjectCode\AnalysisPerTrial\RunAnalysis'))
 addpath("W:\Lorena\Analysis_scripts\Bernardo_code\")
 
@@ -15,16 +17,19 @@ animal_numbers = unique([All_sessInfo.animal]);
 all_rois = {'return';'delay';'stem';'choice';'reward'};
 genotypes = ["Control", "CA1-APP"];
 colors = [0.14,0.85,0.71; 0.85,0.14,0.28];
-fig_name = " Theta d10";
 
 % Parameters 
-region = "choice"; % align to the region end
-time_window = [-1.5, 1.5]; % for ITPC around the onset
-delay_t = {'d10'}; % sessInfo(i).sessDirs
-show_fig = false;
+region = "return"; % align to the region end
+time_window = [-5.0, 10]; % for ITPC around the onset
 
-% Errors
-failed_animal = [];
+delay_t = {'d10'}; % sessInfo(i).sessDirs
+
+freq_band = [6, 12]; % [6, 12] Theta, [12, 20] Beta
+fig_name = delay_t{1} + " Theta";
+
+show_fig = true;
+
+% Outputs
 problematicSessions = {};
 results = struct([]);
 
@@ -47,37 +52,32 @@ for animal = animal_numbers
                 
         i = 1;
         try
-        % Liniarize path
-        [trialInfo, parsingInfo, pathData, pathDataIdeal, ...
-            pathDataLin] = plotTrialPerCell.loadInfo(sessInfo, i);
-        s = s + 1;
-        for block_c = delay_t % sessInfo(i).sessDirs
+            % Liniarize path
+            [trialInfo, parsingInfo, pathData, pathDataIdeal, ...
+                pathDataLin] = plotTrialPerCell.loadInfo(sessInfo, i);
+
+            s = s + 1;
+            for block_c = delay_t % sessInfo(i).sessDirs
             block = block_c{1};
-            
             blockDir = fullfile(sessInfo(i).mainDir, block);
             LFP_dir = fullfile(blockDir,'LFP'); if ...
                 ~exist(LFP_dir,'dir'), mkdir(LFP_dir),end
 
             tinfo = trialInfo.(block);
-            %pinfo = parsingInfo.(block);
-            %pdata = pathData.(block);
             pideal = pathDataIdeal.(block);
-            %plin = pathDataLin.(block);
-            
-            
+
             tridx = trialInfo2simple.trial_startend_ind(tinfo);
             tridx = tridx(~tinfo.degen, :);
-            %trtype = plotTrialPerCell.categtable(tinfo);
+%pinfo = parsingInfo.(block);%plin = pathDataLin.(block);%pdata = pathData.(block);%trtype = plotTrialPerCell.categtable(tinfo);
             
-            
-            
-            %% Start processing LFPs
+            %% Processing LFPs
             channelInLayer = sprintf('CSC%d.ncs', sessInfo.cellLayerChann); % Picks the channel that is in the layer
             lfp = readCRTsd(fullfile(blockDir, channelInLayer));
             roixy = ptempl(strcmp({ptempl.zone}, region));
 
             [lfpx_region, ~, ~, ~] = plotTrialPerCell.extractEEGEpoch(pideal, ...
                 tridx, roixy, lfp, [0, 0]); %lfpidx_region, lfptime_region, tdomain_bin
+
             % Collect data for ITPC 
             lfpd = Data(lfp);
             lfpd = lfpd - mean(lfpd);
@@ -86,7 +86,8 @@ for animal = animal_numbers
             region_end = arrayfun(@(i) lfpx_region(i).idx(2), ...
                 1:length(lfpx_region));
             region_ends{s} = region_end;
-        end
+
+            end
         catch
             problematicSessions = [problematicSessions; sessInfo(i).mainDir];
             %errordlg(sprintf('Error in linearizing path of %s', num2str(iii)));
@@ -96,28 +97,34 @@ for animal = animal_numbers
     end
     
     %% Run ITPC
+    fprintf('\nRunning ITPC\n');
     opt_itpc = struct(...
                 'fs', lfpx_region(1).Fs, ...
                 'step', 0.01, ...
-                'freq_band', [6 12], ...
+                'freq_band', freq_band, ...
                 'n_cycles', 6, ...
                 'band_name', int2str(animal) + fig_name, ...
                 'align_name', region + " end", ...
                 'color', colors(sessInfo.genotype,:), ...
                 'show_fig', show_fig);
 
-    fprintf('\nRunning ITPC\n');
-    [band_itpc, band_itpc_t, n_t] = ITPC_analysis(lfpds, region_ends, ...
-        time_window, opt_itpc);
-    
-    results(a).animal = animal;
-    results(a).genotype = sessInfo.genotype;
-    results(a).n_t = n_t;
-    if n_t > 20 % metric only stable for n > 40
-        results(a).band_itpc = band_itpc;
-        results(a).band_itpc_t = band_itpc_t;
+    try
+        [band_itpc, band_itpc_t, n_t] = ITPC_analysis(lfpds, region_ends, ...
+            time_window, opt_itpc);
+
+        results(a).n_t = n_t;
+        if n_t > 20 % metric only stable for n > 40
+            results(a).band_itpc = band_itpc;
+            results(a).band_itpc_t = band_itpc_t;
+        end
+    catch
+        problematicSessions = [problematicSessions; animal];
     end
 
+    %% Save
+    results(a).animal = animal;
+    results(a).genotype = sessInfo.genotype;
+    
     r = a/length(animal_numbers);
     waitbar(r,wb,"Running " + num2str(r*100,2) + "%");
     a = a + 1;
@@ -128,7 +135,9 @@ delete(wb);
 
 genotypesc = categorical(genotypes);
 genotypesc = reordercats(genotypesc, genotypes);
-plot_itpc(results, genotypesc, time_window, colors, opt_itpc.align_name)
+plot_itpc(results, genotypesc, time_window, colors, ...
+    opt_itpc.align_name + " " + delay_t{1})
+
 
 function plot_itpc(results, genotypes, time_window, colors, name)
     %% get values for plotting
@@ -170,6 +179,7 @@ function plot_itpc(results, genotypes, time_window, colors, name)
     h = [];
     xline(0,LineStyle=":",Color="#343a40")
     hold on;
+    yline(0,LineStyle="--")
     for g = 1:length(genotypes)
         upper = mean_t(g,:) + std_t(g,:);
         lower = mean_t(g,:) - std_t(g,:);
@@ -181,14 +191,12 @@ function plot_itpc(results, genotypes, time_window, colors, name)
         h(end+1) = p;        
     end
     legend(h, genotypes)
-    yline(0,LineStyle="--")
     ylabel("ITPC")
     xlabel("time [t]")
     t_name = "Theta " + " ITPC around " + name;
     title(t_name)
     saveas(gcf, fullfile(save_path, t_name + '.pdf'));
 end
-
 
 %Old code
 %{

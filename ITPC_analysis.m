@@ -1,5 +1,5 @@
-%%%% ITPC analysis
-%%% Bernardo AO
+%% ITPC analysis functions
+% Bernardo AO
 
 
 function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
@@ -32,7 +32,6 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
     % band_itpc_t: ITPC around the align time given the time window
     % n_trials: totla number of trials detected
 
-
     save_path = "W:\Lorena\Analysis_scripts\Bernardo_code\plots";
     ext = ".png";
     n_rand = 1000;
@@ -45,8 +44,10 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
     n_trials = calc_n_trials(align_indices);
     thetas_all = zeros(n_trials, 1); 
     thetas_all_t = zeros(n_trials, len_t); 
-    thetas_rand = zeros(n_trials, n_rand); 
+    thetas_rand = zeros(n_trials, n_rand);
     
+    %% Phase for each session
+
     trial = 1;
     for n = 1:n_sessions
         lfp = lfps{n};
@@ -57,7 +58,9 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
         % Calculate phase
         
         %time_vec = (0:length(lfp)-1) / opt.fs;
-        band_phase = get_phase_LFP(lfp, opt.fs, opt.freq_band, opt.n_cycles);
+        conv_result = conv_LFP(lfp, opt.fs, opt.freq_band, opt.n_cycles);
+
+        band_phase = angle(conv_result);
         thetas = band_phase(align_indx);
         thetas_all(ct) = thetas;
         
@@ -74,11 +77,11 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
             ti = ti + 1;
             thetas_all_t(ct, ti) = band_phase(align_indx + t);
         end
-        
+
         trial = trial + n_t;
     end
 
-    % Calculate ITPC
+    %% Calculate ITPC
     band_itpc = ITPC(thetas_all);
 
     itpc_rand = zeros(n_rand,1);
@@ -146,14 +149,19 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
 
     plot(time_window_vec, band_itpc_t, color=opt.color)
     hold on
+    yline(mu_r,LineStyle="--")
     fill([time_window_vec(1), time_window_vec(end), ...
         time_window_vec(end), time_window_vec(1)], ...
-        [0, 0, mu_r + std_r, mu_r + std_r], ...
+        [mu_r - std_r, mu_r - std_r, mu_r + std_r, mu_r + std_r], ...
         [0.2,0.22,0.25], 'FaceAlpha', 0.3, 'EdgeColor', 'none')
-
+    fill([time_window_vec(1), time_window_vec(end), ...
+        time_window_vec(end), time_window_vec(1)], ...
+        [mu_r - 2*std_r, mu_r - 2*std_r, mu_r + 2*std_r, mu_r + 2*std_r], ...
+        [0.2,0.22,0.25], 'FaceAlpha', 0.1, 'EdgeColor', 'none')
     xline(0,LineStyle=":",Color="#343a40")
-
+    
     xlabel("time [s]")
+    xlim(time_window)
     ylabel("ITPC" + ", n = " + n_trials)
     ylim([0,0.5])
     box off
@@ -165,10 +173,6 @@ function [band_itpc, band_itpc_t, n_trials] = ITPC_analysis(lfps, ...
     band_itpc = (band_itpc - mu_r) / std_r;
     band_itpc_t = (band_itpc_t - mu_r) / std_r;
 end
-
-
-
-% Helper functions
 
 function n_trials = calc_n_trials(cell)
     % Inputs:
@@ -182,7 +186,7 @@ function n_trials = calc_n_trials(cell)
     end
 end
 
-function phase_LFP = get_phase_LFP(lfp, fs, freq_band, n_cycles)
+function conv_result = conv_LFP(lfp, fs, freq_band, n_cycles)
     % Inputs:
     % lfp: 1d array with the LFP signal
     % fs: sampling time_vec
@@ -190,20 +194,23 @@ function phase_LFP = get_phase_LFP(lfp, fs, freq_band, n_cycles)
     % n_cycles: number of cycles for the morlet wavelet
     % 
     % Outputs:
-    % phase_LFP: phase of the LFP for each time bin
+    % conv_result: convolution of the LFP with a morlet wavelett
     
     % Morlet wavelet
     center_freq = round(mean(freq_band));              
-
-    w_len = 6 / center_freq; 
+    
+    w_len = n_cycles / center_freq; 
     t = -w_len/2 : 1/fs : w_len/2;
     s = n_cycles / (2*pi*center_freq); % std of Gaussian
     morlet_wavelet = exp(2*1i*pi*center_freq*t) .* exp(-t.^2/(2*s^2));
+    morlet_wavelet = morlet_wavelet / sqrt(sum(abs(morlet_wavelet).^2));
     
-    % Convolve LFP with Morlet wavelet and extract phase
-    conv_result = conv(lfp, morlet_wavelet, 'same');
-    phase_LFP = angle(conv_result);    
+    % Time domain
+    %conv_result = conv(lfp, morlet_wavelet, 'same');
 
+    % FFT
+    delay = floor(length(morlet_wavelet) / 2);
+    conv_result = circshift(fftfilt(morlet_wavelet, lfp), -delay);
 end
 
 function itpc = ITPC(phase)
@@ -216,4 +223,3 @@ function itpc = ITPC(phase)
     itpc = abs(mean(exp(phase*1i)));
 
 end
-
